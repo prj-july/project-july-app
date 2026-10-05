@@ -31,7 +31,7 @@ export default function Setup() {
           <>
             <Button
               variant="primary"
-              onPress={() => router.push({ pathname: '/setup/pair', params: { host: clean, secure: result.secure ? '1' : '0', name: phoneName.trim() || 'Phone' } })}
+              onPress={() => router.push({ pathname: '/setup/pair', params: { host: clean, secure: result.conn.secure ? '1' : '0', port: String(result.conn.port ?? ''), name: phoneName.trim() || 'Phone' } })}
             >
               Continue to pairing
             </Button>
@@ -60,7 +60,7 @@ export default function Setup() {
 
       <Field
         label="Oven address"
-        hint="An IP address or a name like oven.local"
+        hint="An IP address, or june.local unless your installer chose another name"
         placeholder="192.168.1.75"
         value={host}
         onChangeText={(t) => { setHost(t); setResult(null); }}
@@ -79,10 +79,10 @@ export default function Setup() {
         maxLength={40}
       />
 
-      {result?.ok && result.secure ? (
+      {result?.ok && result.conn.secure ? (
         <Notice tone="success" title="Found your oven">Secure connection to june-local on your oven. You’re ready to pair.</Notice>
       ) : null}
-      {result?.ok && !result.secure ? (
+      {result?.ok && !result.conn.secure ? (
         <Notice tone="info" title="Found your oven, on the local port">
           This phone doesn’t trust your home’s certificate yet, so it will use the oven’s local port. Commands are still signed by this phone. To encrypt the link as well, install ca.crt on this phone, then check again.
         </Notice>

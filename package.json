@@ -44,7 +44,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "test": "npx --yes tsx scripts/protocol.test.ts && npx --yes tsx scripts/client.test.ts",
+    "test": "npx --yes tsx scripts/protocol.test.ts && npx --yes tsx scripts/client.test.ts && npx --yes tsx scripts/camera.test.ts",
     "test:integration": "npx --yes tsx scripts/integration.test.ts",
     "lint": "expo lint"
   },

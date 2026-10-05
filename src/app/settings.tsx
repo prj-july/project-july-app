@@ -2,7 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import Constants from 'expo-constants';
-import { urls } from '@/api/endpoint';
+import { PLAIN_PORT, urls } from '@/api/endpoint';
 import { Button, Card, Divider, Notice, Row, Screen, SectionLabel, Segmented, T, confirm } from '@/components/ui';
 import { useOven, useOvenName } from '@/state/oven';
 import { Icon } from '@/components/Icon';
@@ -49,7 +49,7 @@ export default function Settings() {
           <Card padded={false}>
             <Row icon="wifi" label="Address" value={paired.conn.host} mono />
             <Divider />
-            <Row icon="house" label="Link" value={paired.conn.secure ? 'Secure (HTTPS)' : 'Local port 8080'} />
+            <Row icon="house" label="Link" value={paired.conn.secure ? 'Secure (HTTPS)' : `Local port ${paired.conn.port ?? PLAIN_PORT}`} />
             <Divider />
             <Row icon="link" label="Server status page" onPress={() => WebBrowser.openBrowserAsync(urls(paired.conn).statusPage)} />
           </Card>

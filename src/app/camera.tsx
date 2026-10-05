@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { AppState, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { useFocusEffect } from 'expo-router';
 import { show } from '@/api/modes';
@@ -10,7 +10,6 @@ import { useOven } from '@/state/oven';
 import { space, useTheme } from '@/theme';
 
 const DEMO_IMAGE = require('../../assets/demo-camera.jpg');
-const FRAME_MS = 400;
 
 export default function Camera() {
   const { c, f, r } = useTheme();
@@ -20,13 +19,16 @@ export default function Camera() {
   const [failed, setFailed] = useState(false);
   const now = useNow(true);
 
-  // While this screen is open: keep the camera awake and pull fresh stills.
+  // Watch the camera while this screen is open and the app is in front. Stopping
+  // lets the oven turn its camera and interior light off again.
   useFocusEffect(useCallback(() => {
     if (!link) return;
-    link.cameraOn(120);
-    const wake = setInterval(() => link.cameraOn(120), 100_000);
-    const pull = link.demo ? null : setInterval(() => setSrc(link.latestImageUrl()), FRAME_MS);
-    return () => { clearInterval(wake); if (pull) clearInterval(pull); };
+    let stop: (() => void) | null = null;
+    const start = () => { stop ??= link.watchCamera(setSrc); };
+    const pause = () => { stop?.(); stop = null; };
+    if (AppState.currentState === 'active') start();
+    const sub = AppState.addEventListener('change', (state) => (state === 'active' ? start() : pause()));
+    return () => { sub.remove(); pause(); };
   }, [link]));
 
   const frameAt = link?.demo ? s.imageAt : lastFrame;

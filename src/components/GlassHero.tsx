@@ -49,7 +49,8 @@ function running(s: OvenSnapshot, unit: Unit, left: number | null) {
     return { mark: 'preheat' as MarkKind, word: 'Preheating', q: target ? `to ${target}` : undefined, hero: oven, bar: ['preheat', s.progress ?? 0] as [BarKind, number], a: `${label}${target ? ` at ${target}` : ''}`, b: left !== null ? `Timer ${formatDuration(left)} once hot` : 'The oven lets you know when it’s hot.' };
   }
   if (s.probeC !== null) {
-    return { mark: 'cooking' as MarkKind, word: 'Cooking', q: 'food', hero: `${show(s.probeC, unit)}°`, bar: ['heat', s.progress ?? 1] as [BarKind, number], a: `${label}${target ? ` at ${target}` : ''}`, b: `Oven ${oven}` };
+    const food = s.probeTargetC !== null ? `food · target ${show(s.probeTargetC, unit)}°` : 'food';
+    return { mark: 'cooking' as MarkKind, word: 'Cooking', q: food, hero: `${show(s.probeC, unit)}°`, bar: ['heat', s.progress ?? 1] as [BarKind, number], a: `${label}${target ? ` at ${target}` : ''}`, b: `Oven ${oven}` };
   }
   if (left !== null) {
     const total = elapsed + left;

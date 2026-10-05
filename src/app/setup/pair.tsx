@@ -13,7 +13,7 @@ import { space, useTheme } from '@/theme';
 export default function Pair() {
   const { c, f, t, r, look } = useTheme();
   const { completePairing } = useOven();
-  const params = useLocalSearchParams<{ host: string; secure: string; name: string }>();
+  const params = useLocalSearchParams<{ host: string; secure: string; port?: string; name: string }>();
   const [ready, setReady] = useState(false);
   const [step, setStep] = useState<PairingStep>({ step: 'starting' });
   const session = useRef<PairingSession | null>(null);
@@ -21,7 +21,7 @@ export default function Pair() {
 
   function begin() {
     session.current?.close();
-    const s = new PairingSession({ host: params.host, secure: params.secure === '1' }, params.name ?? 'Phone', (st) => {
+    const s = new PairingSession({ host: params.host, secure: params.secure === '1', port: params.port ? Number(params.port) : undefined },params.name ?? 'Phone', (st) => {
       setStep(st);
       if (st.step === 'show-code') setTotal(st.expiresAt - Date.now());
       if (st.step === 'paired') {

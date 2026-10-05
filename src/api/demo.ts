@@ -88,7 +88,11 @@ export class DemoOven implements OvenLink {
   }
   async keepCooking() { await this.wait(); }
   async respondToOffer() { await this.wait(); this.set({ offer: null }); }
-  async cameraOn() { this.set({ imageUrl: 'demo', imageAt: Date.now() }); }
-  latestImageUrl() { return 'demo'; }
+  watchCamera() {
+    const frame = () => this.set({ imageUrl: 'demo', imageAt: Date.now() });
+    frame();
+    const t = setInterval(frame, 1000);
+    return () => clearInterval(t);
+  }
   async unpair() {}
 }

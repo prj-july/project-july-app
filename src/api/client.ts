@@ -1,7 +1,8 @@
 // Live link to an oven through june-local: REST snapshot + companion WebSocket.
 import { rehomeMediaUrl, urls, type Connection } from './endpoint';
+import { NotAStreamError, readMjpeg } from './mjpeg';
 import { MODES } from './modes';
-import { MC, OrderGenerator, buildSignedFrame, type CompanionKeys } from './protocol';
+import { MC, OrderGenerator, buildSignedFrame, toB64, type CompanionKeys } from './protocol';
 
 // --- Shared types ------------------------------------------------------------
 
@@ -28,6 +29,8 @@ export type OvenSnapshot = {
   cavityC: number | null;
   targetC: number | null;
   probeC: number | null;
+  /** The food probe target from the current step's exit criteria, if any. */
+  probeTargetC: number | null;
   planId: number;
   progress: number | null;
   remainingMs: number | null;
@@ -41,7 +44,7 @@ export type OvenSnapshot = {
 
 export const emptySnapshot = (): OvenSnapshot => ({
   link: 'connecting', ovenOnline: null, active: false, phase: 'idle', mode: null,
-  cavityC: null, targetC: null, probeC: null, planId: 0, progress: null,
+  cavityC: null, targetC: null, probeC: null, probeTargetC: null, planId: 0, progress: null,
   remainingMs: null, remainingAt: 0, elapsedMs: null, imageUrl: null, imageAt: null,
   offer: null, ended: null,
 });
@@ -58,8 +61,11 @@ export interface OvenLink {
   setTimer(ms: number): Promise<void>;
   keepCooking(): Promise<void>;
   respondToOffer(accept: boolean): Promise<void>;
-  cameraOn(seconds?: number): Promise<void>;
-  latestImageUrl(): string | null;
+  /**
+   * Live camera pictures while a screen is watching: calls `onFrame` with an
+   * image URI for each new picture. Returns a function that stops watching.
+   */
+  watchCamera(onFrame: (uri: string) => void): () => void;
   unpair(): Promise<void>;
 }
 
@@ -131,14 +137,18 @@ export function openSocket(conn: Connection, token: string): WebSocket {
 type Json = Record<string, any>;
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
-function planTarget(plan: Json | undefined): { targetC: number | null; mode: string | null; planId: number | null } {
+function planTarget(plan: Json | undefined): { targetC: number | null; probeTargetC: number | null; mode: string | null; planId: number | null } {
   const food = plan?.food;
   const steps: Json[] = food?.plan?.steps ?? [];
   const idx = num(plan?.step_state?.step_index) ?? 0;
   const step = steps[idx] ?? steps[0];
   const t = num(step?.temperature_cavity);
+  // exit_criteria: [{ type: "probe", target: { id: "left", value: <milli-°C> } }]
+  const criteria: Json[] = Array.isArray(step?.exit_criteria) ? step.exit_criteria : [];
+  const probe = criteria.map((c) => (c?.type === 'probe' ? num(c?.target?.value) : null)).find((v) => v !== null && v > 0) ?? null;
   return {
     targetC: t !== null && t > 0 ? t / 1000 : null,
+    probeTargetC: probe !== null ? probe / 1000 : null,
     mode: typeof food?.name === 'string' ? food.name : null,
     planId: num(food?.plan?.id),
   };
@@ -279,6 +289,7 @@ export class LiveOven implements OvenLink {
         if (d.cook_plan_data) {
           const t = planTarget(d.cook_plan_data);
           if (t.targetC !== null) patch.targetC = t.targetC;
+          patch.probeTargetC = t.probeTargetC;
           if (t.mode) patch.mode = t.mode;
           if (t.planId !== null) patch.planId = t.planId;
         }
@@ -288,12 +299,12 @@ export class LiveOven implements OvenLink {
       case MC.CookPlanStarted: {
         const t = planTarget(d);
         this.preheatDone = false;
-        this.set({ active: true, ended: null, targetC: t.targetC, mode: t.mode, planId: t.planId ?? 0 });
+        this.set({ active: true, ended: null, targetC: t.targetC, probeTargetC: t.probeTargetC, mode: t.mode, planId: t.planId ?? 0 });
         return;
       }
       case MC.CookPlanEnded:
         this.preheatDone = false;
-        this.set({ active: false, ended: d.type === 'completed' ? 'completed' : 'cancelled', progress: null, remainingMs: null, offer: null });
+        this.set({ active: false, ended: d.type === 'completed' ? 'completed' : 'cancelled', progress: null, remainingMs: null, probeTargetC: null, offer: null });
         return;
       case MC.DeviceState:
         if (d.state === 'idle') this.preheatDone = false;
@@ -350,7 +361,7 @@ export class LiveOven implements OvenLink {
   async cancel() {
     await this.must(MC.Cancel, { plan_id: this.s.planId }, ['success', 'not-allowed']);
     this.preheatDone = false;
-    this.set({ active: false, ended: 'cancelled', progress: null, remainingMs: null });
+    this.set({ active: false, ended: 'cancelled', progress: null, remainingMs: null, probeTargetC: null });
   }
 
   async setTemperature(tempC: number) {
@@ -380,11 +391,51 @@ export class LiveOven implements OvenLink {
     this.set({ offer: null });
   }
 
-  async cameraOn(seconds = 120) {
-    await rest(this.p.conn, 'POST', `/internal/camera/on?seconds=${seconds}`, { token: this.p.accessToken }).catch(() => {});
+  watchCamera(onFrame: (uri: string) => void): () => void {
+    const ctl = new AbortController();
+    let stopPolling: (() => void) | null = null;
+    const headers = { Authorization: `Bearer ${this.p.accessToken}`, 'User-Agent': USER_AGENT };
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    // Prefer june-local's MJPEG stream: one download per new picture, and the
+    // server turns the camera and light off ~15 s after it closes. Reconnect
+    // when it drops; after two attempts in a row with no picture, or on a
+    // server without the stream, fall back to fetching stills.
+    (async () => {
+      let misses = 0;
+      while (!ctl.signal.aborted) {
+        let got = false;
+        try {
+          await readMjpeg(urls(this.p.conn).stream, {
+            headers, signal: ctl.signal,
+            onFrame: (jpeg) => { got = true; misses = 0; onFrame(`data:image/jpeg;base64,${toB64(jpeg)}`); },
+          });
+        } catch (e) {
+          if (ctl.signal.aborted) return;
+          if (e instanceof NotAStreamError) break;
+        }
+        if (!got && ++misses >= 2) break;
+        await wait(2000);
+      }
+      if (!ctl.signal.aborted) stopPolling = this.pollStills(onFrame);
+    })();
+
+    return () => { ctl.abort(); stopPolling?.(); };
   }
 
-  latestImageUrl() { return `${urls(this.p.conn).latestImage}?ts=${Date.now()}`; }
+  /** Fallback live view: keep the camera awake and fetch the latest still once a second (its cadence). */
+  private pollStills(onFrame: (uri: string) => void): () => void {
+    const on = () => rest(this.p.conn, 'POST', '/internal/camera/on?seconds=120', { token: this.p.accessToken }).catch(() => {});
+    on();
+    const wake = setInterval(on, 100_000);
+    const pull = setInterval(() => onFrame(`${urls(this.p.conn).latestImage}?ts=${Date.now()}`), 1000);
+    return () => {
+      clearInterval(wake);
+      clearInterval(pull);
+      // Turns the interior light off too, which follows the camera.
+      rest(this.p.conn, 'POST', '/internal/camera/off', { token: this.p.accessToken }).catch(() => {});
+    };
+  }
 
   async unpair() {
     await this.command(MC.Unpair, {}, 4000).catch(() => null);

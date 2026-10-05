@@ -1,9 +1,11 @@
 /// <reference types="node" />
-// End-to-end: the app's real PairingSession + LiveOven against the Python
-// reference server (june_local_cloud.py), with a simulated oven on the other side.
+// End-to-end: the app's real PairingSession + LiveOven against june-local (the
+// Go server, JUNE_LOCAL_BIN) or the Python reference server (june_local_cloud.py,
+// JUNE_LOCAL_CLOUD), with a simulated oven on the other side.
 //
-// Run: JUNE_LOCAL_CLOUD=/path/to/june_local_cloud.py npm run test:integration
-// (needs `py` and `openssl`)
+// Run: JUNE_LOCAL_BIN=/path/to/june-local npm run test:integration
+//  or: JUNE_LOCAL_CLOUD=/path/to/june_local_cloud.py npm run test:integration (needs `py`)
+// Both need `openssl`.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -18,8 +20,13 @@ import { LiveOven, type Paired } from '../src/api/client';
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'; // throwaway self-signed cert below
 const SERVER = process.env.JUNE_LOCAL_CLOUD;
-if (!SERVER) throw new Error('Set JUNE_LOCAL_CLOUD to the path of june_local_cloud.py');
+// The real server instead: a june-local binary built from the installer repo's
+// golocal/ (`go build -o june-local.exe .`). It also gets the plain-listener and
+// camera-stream checks.
+const GO_BIN = process.env.JUNE_LOCAL_BIN;
+if (!SERVER && !GO_BIN) throw new Error('Set JUNE_LOCAL_BIN to a june-local binary, or JUNE_LOCAL_CLOUD to the path of june_local_cloud.py');
 const PORT = 18443;
+const HTTP_PORT = 18080;
 const OVEN_ID = 'oven-sim-0001';
 const conn = { host: `127.0.0.1:${PORT}`, secure: true };
 
@@ -39,11 +46,18 @@ async function until<T>(what: string, fn: () => T | undefined | null | false, ms
 const dir = mkdtempSync(join(tmpdir(), 'july-it-'));
 execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost',
   '-keyout', join(dir, 'k.pem'), '-out', join(dir, 'c.pem')], { stdio: 'ignore' });
-const server = spawn('py', ['-3', SERVER, '--cert', join(dir, 'c.pem'), '--key', join(dir, 'k.pem'), '--port', String(PORT),
-  '--bind', '127.0.0.1', '--log', join(dir, 'server.log'), '--jsonl', join(dir, 'frames.jsonl')], {
-  env: { ...process.env, JUNE_COMPANION_STATE: join(dir, 'companions.json'), JUNE_CONTENT_ROOT: dir },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+const server = GO_BIN
+  ? spawn(GO_BIN, ['--cert', join(dir, 'c.pem'), '--key', join(dir, 'k.pem'), '--port', String(PORT), '--http-port', String(HTTP_PORT),
+    '--bind', '127.0.0.1', '--log', join(dir, 'server.log'), '--jsonl', join(dir, 'frames.jsonl'),
+    '--companion-state', join(dir, 'companions.json'), '--content-root', dir, '--media-dir', join(dir, 'media')], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  : spawn('py', ['-3', SERVER as string, '--cert', join(dir, 'c.pem'), '--key', join(dir, 'k.pem'), '--port', String(PORT),
+    '--bind', '127.0.0.1', '--log', join(dir, 'server.log'), '--jsonl', join(dir, 'frames.jsonl')], {
+    env: { ...process.env, JUNE_COMPANION_STATE: join(dir, 'companions.json'), JUNE_CONTENT_ROOT: dir },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+const SERVER_NAME = GO_BIN ? 'june-local (Go)' : 'reference server';
 let serverOut = '';
 server.stdout.on('data', (d) => (serverOut += d));
 server.stderr.on('data', (d) => (serverOut += d));
@@ -142,7 +156,7 @@ async function main() {
   }
   const oven = new SimOven();
   await oven.connect();
-  console.log('✓ simulated oven connected to reference server');
+  console.log(`✓ simulated oven connected to ${SERVER_NAME}`);
 
   const steps: PairingStep[] = [];
   const session = new PairingSession(conn, 'Integration phone', (s) => steps.push(s));
@@ -196,9 +210,36 @@ async function main() {
   assert.ok(commands.every((f) => f.target?.id === OVEN_ID && f.device_id === paired.deviceId));
   console.log(`✓ all ${oven.received.length} companion frames verified against the paired signing key`);
 
+  if (GO_BIN) await plainAndCamera(paired as Paired);
+
   link.stop();
   oven.ws.close();
   console.log('\nintegration: all checks passed');
+}
+
+/** june-local only: the plain listener, and Live view's MJPEG stream fed by camerad's /internal/video. */
+async function plainAndCamera(paired: Paired) {
+  const plain = new LiveOven({ ...paired, conn: { host: '127.0.0.1', secure: false, port: HTTP_PORT } });
+  plain.start();
+  await until('plain link online', () => plain.snapshot().link === 'online');
+  console.log(`✓ the same pairing works over the plain listener (:${HTTP_PORT} here, :80 on the oven)`);
+
+  const uris: string[] = [];
+  const stop = plain.watchCamera((u) => uris.push(u));
+  const state = () => fetch(`http://127.0.0.1:${HTTP_PORT}/internal/camera-state`).then((r) => r.json() as Promise<{ viewer: boolean }>);
+  for (let i = 0; !(await state()).viewer; i++) { if (i > 100) throw new Error('stream never opened the camera gate'); await sleep(50); }
+
+  const jpeg = new Uint8Array(4096).map((_, i) => (i * 13) & 0xff);
+  jpeg.set([0xff, 0xd8], 0);
+  jpeg.set([0xff, 0xd9], jpeg.length - 2);
+  const res = await fetch(`http://127.0.0.1:${HTTP_PORT}/internal/video`, { method: 'POST', body: jpeg });
+  assert.equal(res.status, 200);
+  const uri = await until('a stream frame', () => uris[uris.length - 1]);
+  assert.deepEqual(fromB64(uri.slice('data:image/jpeg;base64,'.length)), jpeg);
+  await until('10011 for the new still', () => plain.snapshot().imageUrl?.startsWith(`http://127.0.0.1:${HTTP_PORT}/media/prod/images/latest.jpg`));
+  stop();
+  plain.stop();
+  console.log('✓ Live view reads the MJPEG stream, which holds the camera gate open while watched');
 }
 
 main()

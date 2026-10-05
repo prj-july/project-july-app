@@ -70,6 +70,27 @@ const rejects = async (p: Promise<unknown>, code: string) => {
   console.log('✓ progress.percentage read as 0–100, clamped to 0..1');
 }
 
+// --- probe target from the step's exit criteria --------------------------------
+{
+  const { link, emit } = rig(oven('success'));
+  // Shape from the Home Assistant integration's parse_cook_plan (_probe_target).
+  const probePlan = {
+    food: { name: 'roast', plan: { id: 0, steps: [{ id: 1, temperature_cavity: 176_667,
+      exit_criteria: [{ type: 'time', value: 600_000 }, { type: 'probe', target: { id: 'left', value: 62_778 } }] }] } },
+    step_state: { step_index: 0 },
+  };
+  emit(MC.CookPlanStarted, probePlan);
+  assert.ok(Math.abs(link.snapshot().probeTargetC! - 62.778) < 1e-9);
+  // A 10013 without a probe criterion clears it; one with it sets it again.
+  emit(MC.CookingState, { sensor_data: { cavity: 170_000 }, cook_plan_data: plan('roast', 0, 176_667) });
+  assert.equal(link.snapshot().probeTargetC, null);
+  emit(MC.CookingState, { sensor_data: { cavity: 170_000 }, cook_plan_data: probePlan });
+  assert.ok(Math.abs(link.snapshot().probeTargetC! - 62.778) < 1e-9);
+  emit(MC.CookPlanEnded, { plan_id: 0, type: 'completed' });
+  assert.equal(link.snapshot().probeTargetC, null);
+  console.log('✓ probe target read from exit_criteria and cleared when the cook ends');
+}
+
 // --- setTemperature ---------------------------------------------------------
 async function main() {
   {

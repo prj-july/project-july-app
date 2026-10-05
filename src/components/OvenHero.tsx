@@ -114,6 +114,7 @@ export function OvenHero({ s, unit, demo, onCamera }: { s: OvenSnapshot; unit: U
             <Icon name="probe" color={c.inkMuted} />
             <T style={{ flex: 1 }}>Food probe</T>
             <T v="bodyStrong">{show(s.probeC, unit)}°{unit}</T>
+            {s.probeTargetC !== null ? <T muted>of {show(s.probeTargetC, unit)}°</T> : null}
           </View>
         ) : null}
       </View>

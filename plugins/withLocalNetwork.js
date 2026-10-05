@@ -1,6 +1,6 @@
 // Lets the Android build reach the oven on the home network:
 //  - trusts user-installed CAs (the per-home ca.crt from generate_certs.sh)
-//  - allows cleartext for the local :8080 fallback listener
+//  - allows cleartext for the plain fallback listener (:80 on the oven)
 const { AndroidConfig, withAndroidManifest, withDangerousMod } = require('expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
