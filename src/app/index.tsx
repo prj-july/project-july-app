@@ -4,6 +4,7 @@ import { router, useIsFocused } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { OvenError, type OvenLink, type OvenSnapshot } from '@/api/client';
 import { MODES, fToC, isFixed, show, formatDuration } from '@/api/modes';
+import { bannerCopy, ovenGate } from '@/api/schedule';
 import { CameraTile } from '@/components/CameraTile';
 import { DONE_WINDOW_MS, GlassHero } from '@/components/GlassHero';
 import { Icon, JulyMark, type IconName } from '@/components/Icon';
@@ -238,6 +239,8 @@ function OvenPage({ entry, visible }: { entry: OvenEntry; visible: boolean }) {
           </Notice>
         ) : null}
 
+        <ScheduleBanner entryId={entry.id} s={s} unit={unit} run={run} />
+
         {glass ? (
           <GlassHero
             s={s}
@@ -293,6 +296,53 @@ function OvenPage({ entry, visible }: { entry: OvenEntry; visible: boolean }) {
         )}
       </View>
     </ScrollView>
+  );
+}
+
+function ScheduleBanner({ entryId, s, unit, run }: {
+  entryId: string; s: OvenSnapshot; unit: 'F' | 'C';
+  run: (key: string, fn: () => Promise<void>) => Promise<void>;
+}) {
+  const { schedules, cancelSchedule, startScheduled } = useOven();
+  const scheduled = schedules[entryId];
+  const now = useNow(!!scheduled);
+  const asked = useRef<string | null>(null);
+  const gate = ovenGate(s);
+  const copy = scheduled ? bannerCopy(scheduled, now, gate, unit) : null;
+
+  useEffect(() => {
+    if (!scheduled || copy?.kind !== 'ask') return;
+    if (asked.current === scheduled.startAt + ':' + scheduled.createdAt) return;
+    asked.current = scheduled.startAt + ':' + scheduled.createdAt;
+    void confirm(
+      copy.title,
+      'Start this cook now? The oven did not preheat at the time you set.',
+      'Start now',
+    ).then((ok) => {
+      if (ok) void run('sched', () => startScheduled(entryId));
+      else cancelSchedule(entryId);
+    });
+  }, [scheduled, copy?.kind, copy?.title, entryId, run, startScheduled, cancelSchedule]);
+
+  if (!scheduled || !copy) return null;
+
+  return (
+    <View style={{ gap: space[3] }}>
+      <Notice tone={copy.kind === 'ask' ? 'warning' : copy.kind === 'start' ? 'success' : 'info'} title={copy.title}>
+        {copy.body}
+      </Notice>
+      <View style={{ flexDirection: 'row', gap: space[3] }}>
+        <Button style={{ flex: 1 }} variant="quiet" onPress={() => cancelSchedule(entryId)}>Cancel</Button>
+        <Button
+          style={{ flex: 1 }}
+          variant="primary"
+          busy={copy.kind === 'start'}
+          onPress={() => run('sched', () => startScheduled(entryId))}
+        >
+          Start now
+        </Button>
+      </View>
+    </View>
   );
 }
 
