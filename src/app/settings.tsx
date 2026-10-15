@@ -41,6 +41,10 @@ export default function Settings() {
     <Screen>
       {!demo ? <OvenList /> : null}
 
+      <Card padded={false}>
+        <Row icon="history" label="Cook history" onPress={() => router.push('/history')} />
+      </Card>
+
       {paired ? (
         <View style={{ gap: space[3] }}>
           <SectionLabel>{name}</SectionLabel>

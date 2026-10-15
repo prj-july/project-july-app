@@ -77,6 +77,7 @@ Colours, fonts, type scale and component choices for each theme live in
 | **Set up** | Finds the oven on the home network (or takes a typed address), checks the server (HTTPS first, then the plain listener on port 80 or 8080), optionally takes the home `ca.crt`, and names this phone. |
 | **Pair** | Shows the eight-digit code to type on the oven's Connect screen, with a countdown, then runs the SRP key exchange. |
 | **Oven** | One page per paired oven; swipe (or tap the dots) to switch. Large temperature readout, status, preheat progress, timer countdown and probe reading, and while it's on, a full-width live camera tile with Full screen, Save and Share. Controls for target temperature, timer and *Stop cooking*. |
+| **Cook history** | Cooks started from this phone, and cooks that finish on the oven, newest first and grouped by day. Repeat opens the review with the same mode, temperature, plan and timer. The list lives under the history icon on the home screen, and in Settings. |
 | **Start a cook** | Mode, temperature and an optional timer: Bake, Roast, Air fry, Broil, Toast, Grill, Pizza, Reheat, Keep warm, Dehydrate and Proof, as on the Home Assistant card. Toast takes a level from 1 (light) to 9 (dark) and times itself. Grill takes the oven's Low, Medium or High heat. Reheat runs at the 350 °F the oven sets, and its one control is a timer from 1 minute to 10 hours (an hour unless changed). Broil, Pizza and Keep warm run at the temperature the oven sets (500, 500 and 170 °F). Proof needs June's presets content on the oven, which the installer can add (it isn't in the public payload). |
 | **Live view** | The camera full screen, with Save (to Photos) and Share. Reads june-local's MJPEG stream; on a server without it, stills at the chosen frame rate (1, 5, 10 or 15 per second). Keeps the camera awake while open. |
 | **Settings** | Theme and light/dark, the paired ovens (show one, add another), the current oven's details, connection and *Forget this oven*, °F/°C, camera frame rate and server status page. With Still Glass, also the home screen choices from the Home Assistant card: the name tucking into the icon, cook modes in the oven's order or most used first, and a 12/24-hour clock. The oven's icon is always the June oven. |
@@ -326,8 +327,9 @@ npm run test:integration
 - `npm test` checks the protocol against the Home Assistant client's test
   vectors: the SRP `B` hash, the Damm check digit, signature layout, and a full
   SRP handshake where both sides derive the same key. It also checks the
-  endpoint URLs, the MJPEG parser, and Live view's stream, reconnect and
-  stills fallback against a local stand-in for june-local's stream.
+  endpoint URLs, the MJPEG parser, Live view's stream, reconnect and
+  stills fallback against a local stand-in for june-local's stream, and cook
+  history (phone starts, live oven updates, Repeat params, the per-oven cap).
 - `npm run test:integration` starts the Python reference server
   (`june_local_cloud.py`; set `JUNE_LOCAL_CLOUD` to its path, needs `py` and
   `openssl`) with a throwaway certificate.
@@ -350,9 +352,9 @@ native binaries), prefix commands with
 ## Layout
 
 ```
-src/app/          screens (Expo Router): index, cook, camera, settings, setup/index, setup/pair
+src/app/          screens (Expo Router): index, cook, history, camera, settings, setup/index, setup/pair
 src/api/          protocol.ts (crypto + frames), pairing.ts, client.ts (live link),
-                  mjpeg.ts (camera stream), demo.ts, endpoint.ts, modes.ts, pairingCode.ts,
+                  mjpeg.ts (camera stream), demo.ts, endpoint.ts, modes.ts, history.ts, pairingCode.ts,
                   discover.ts + scan.ts (network search), trust.ts (home certificate)
 src/state/        OvenProvider (paired oven, live link, preferences, certificate trust), secure storage
 src/components/   shared components, icons, OvenHero (July), GlassHero + glass.tsx (Still Glass)
@@ -361,7 +363,7 @@ modules/july-tls/ native module: per-host certificate trust for fetch and WebSoc
 docs/screenshots/ README screenshots (store-assets/ has the Play Store graphics)
 plugins/          Android network security config (user CAs, cleartext for the plain port),
                   photo saving permission, local release signing, Windows native build settings
-scripts/          protocol, client, camera, discovery and integration tests;
+scripts/          protocol, client, camera, discovery, history and integration tests;
                   build-apk.mjs (test APK), build-android-release.js (Play AAB)
 ```
 

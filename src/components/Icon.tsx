@@ -5,7 +5,8 @@ import Svg, { Circle, Path, Rect } from 'react-native-svg';
 export type IconName =
   | 'oven' | 'thermometer' | 'camera' | 'house' | 'wifi' | 'check-circle'
   | 'timer' | 'flame' | 'stop' | 'plus' | 'minus' | 'chevron-right' | 'chevron-left' | 'chevron-down' | 'chevron-up'
-  | 'gear' | 'probe' | 'light' | 'link' | 'alert' | 'expand' | 'close' | 'download' | 'share';
+  | 'gear' | 'probe' | 'light' | 'link' | 'alert' | 'expand' | 'close' | 'download' | 'share'
+  | 'history';
 
 export function Icon({ name, size = 24, color }: { name: IconName; size?: number; color: string }) {
   const s = { stroke: color, strokeWidth: 1.75, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, fill: 'none' };
@@ -98,6 +99,13 @@ function glyph(name: IconName, s: object, color: string) {
       return <Path d="M12 4.5v10.5M7.5 10.5 12 15l4.5-4.5M5 19.5h14" {...s} />;
     case 'share':
       return <Path d="M12 14.5V4.5M8 8.5l4-4 4 4M7.5 11.5H6a1.5 1.5 0 0 0-1.5 1.5v5.5A1.5 1.5 0 0 0 6 20h12a1.5 1.5 0 0 0 1.5-1.5V13a1.5 1.5 0 0 0-1.5-1.5h-1.5" {...s} />;
+    case 'history':
+      return (<>
+        <Circle cx={5.5} cy={7} r={1.15} fill={color} />
+        <Circle cx={5.5} cy={12} r={1.15} fill={color} />
+        <Circle cx={5.5} cy={17} r={1.15} fill={color} />
+        <Path d="M9 7h10.5M9 12h10.5M9 17h7" {...s} />
+      </>);
   }
 }
 

@@ -23,8 +23,8 @@ export default function Cook() {
   const { link, prefs, countUse, recordCook } = useOven();
   const glass = look.hero === 'glass';
   const unit = prefs.unit;
-  // `temp` (°F) and `plan` come from Repeat on the home screen: the last cook's.
-  const params = useLocalSearchParams<{ mode?: string; temp?: string; plan?: string }>();
+  // `temp` (°F), `plan` and `timer` come from Repeat (home or history).
+  const params = useLocalSearchParams<{ mode?: string; temp?: string; plan?: string; timer?: string }>();
   const [modeId, setModeId] = useState(MODES.some((m) => m.id === params.mode) ? params.mode! : 'bake');
   const mode = MODES.find((m) => m.id === modeId)!;
   // Held in °F on 5° steps, the oven's native scale; °C is shown rounded.
@@ -32,7 +32,12 @@ export default function Cook() {
   const [tempF, setTempF] = useState(asked >= mode.minF && asked <= mode.maxF ? Math.round(asked / 5) * 5 : mode.defaultF);
   // A mode with plans (toast level, grill heat) picks one instead of a temperature.
   const [plan, setPlan] = useState(validPlan(mode, params.plan ? Number(params.plan) : undefined));
-  const [timerMin, setTimerMin] = useState(mode.timed?.defaultMin ?? 0);
+  const askedTimer = Number(params.timer);
+  const [timerMin, setTimerMin] = useState(
+    Number.isFinite(askedTimer) && askedTimer > 0
+      ? Math.min(mode.timed?.maxMin ?? 600, Math.max(1, Math.round(askedTimer)))
+      : (mode.timed?.defaultMin ?? 0),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,7 +62,7 @@ export default function Cook() {
       await link.preheat(mode.id, fToC(startF), plan);
       // Counted only when the oven accepts: a review opened and cancelled is not a use.
       countUse(mode.id);
-      recordCook(mode.id, startF, plan);
+      recordCook(mode.id, startF, plan, timerMin || undefined);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       router.back();
       // The timer waits for the oven to report the new cook's plan (LiveOven.runningPlan).

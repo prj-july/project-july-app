@@ -112,7 +112,10 @@ function Dashboard() {
             </View>
           ) : null}
         </View>
-        <IconButton icon="gear" label="Settings" onPress={() => router.push('/settings')} />
+        <View style={{ flexDirection: 'row' }}>
+          <IconButton icon="history" label="Cook history" onPress={() => router.push('/history')} />
+          <IconButton icon="gear" label="Settings" onPress={() => router.push('/settings')} />
+        </View>
       </View>
 
       {many ? (
