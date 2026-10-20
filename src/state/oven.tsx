@@ -3,6 +3,7 @@ import { AppState, Platform } from 'react-native';
 import { LiveOven, OvenError, emptySnapshot, type OvenLink, type OvenSnapshot, type Paired } from '@/api/client';
 import { DEMO_SCENES, DemoOven, type DemoScene } from '@/api/demo';
 import type { Connection } from '@/api/endpoint';
+import { beginCook, demoSample, dropOven, noteLive, type HistoryEntry } from '@/api/history';
 import { MODES, fToC, type Unit } from '@/api/modes';
 import { clearFor, decide, dropStale, failFor, ovenGate, setFor, type ScheduledCook } from '@/api/schedule';
 import { applyTrust, hasTrust, type Trust } from '@/api/trust';
@@ -68,6 +69,8 @@ export type LastCook = { mode: string; tempF: number; plan?: number; at: number 
 const LAST_COOKS_KEY = 'july.lastcooks.v1';
 /** Before several ovens: the one last cook. Moved to the first oven on load. */
 const OLD_LAST_KEY = 'july.last.v1';
+/** Cooks this phone has seen, newest first. Demo ovens stay in memory. */
+const HISTORY_KEY = 'july.history.v1';
 
 /** One paired oven (or a demo oven, whose `paired` is null). */
 export type OvenEntry = { id: string; name: string; paired: Paired | null; link: OvenLink };
@@ -98,8 +101,12 @@ type Ctx = {
   lastCook: LastCook | null;
   /** Last cook per oven id, for Repeat on each oven's page. */
   lastCooks: Record<string, LastCook>;
-  /** Remember a cook the current oven accepted, for Repeat. */
-  recordCook(mode: string, tempF: number, plan?: number, ovenId?: string): void;
+  /** Remember a cook an oven accepted (the current one unless `ovenId`), for Repeat and the history. */
+  recordCook(mode: string, tempF: number, plan?: number, opts?: { timerMin?: number; ovenId?: string }): void;
+  /** Cooks this phone has seen, newest first (every oven). */
+  history: HistoryEntry[];
+  /** Drop the current oven's history from this phone. */
+  clearHistory(): void;
   /** The current oven's pending delayed start, if any. */
   scheduled: ScheduledCook | null;
   /** Pending delayed starts, keyed by oven id. */
@@ -203,6 +210,7 @@ export function OvenProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
   const [uses, setUses] = useState<Uses>({});
   const [lastCooks, setLastCooks] = useState<Record<string, LastCook>>({});
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [schedules, setSchedules] = useState<Record<string, ScheduledCook>>({});
   const [trusts, setTrusts] = useState<Record<string, Trust>>({});
 
@@ -213,10 +221,10 @@ export function OvenProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     (async () => {
-      const [list, cur, pr, u, tr, lc, oldLast, sched] = await Promise.all([
+      const [list, cur, pr, u, tr, lc, oldLast, hist, sched] = await Promise.all([
         loadPaired(), load<string>(CURRENT_KEY), load<Partial<Prefs>>(PREFS_KEY), load<Uses>(USES_KEY),
         load<Record<string, Trust>>(TRUST_KEY), load<Record<string, LastCook>>(LAST_COOKS_KEY), load<LastCook>(OLD_LAST_KEY),
-        load<Record<string, ScheduledCook>>(SCHEDULE_KEY),
+        load<HistoryEntry[]>(HISTORY_KEY), load<Record<string, ScheduledCook>>(SCHEDULE_KEY),
       ]);
       if (pr) {
         const next = { ...DEFAULT_PREFS, ...pr };
@@ -238,6 +246,7 @@ export function OvenProvider({ children }: { children: ReactNode }) {
         remove(OLD_LAST_KEY).catch(() => {});
       }
       setLastCooks(cooks);
+      let nextHist = hist ?? [];
       if (sched) {
         // A start missed by hours (the app was closed) is dropped, not offered.
         const fresh = dropStale(sched, Date.now());
@@ -257,8 +266,13 @@ export function OvenProvider({ children }: { children: ReactNode }) {
         // screens; ?demo=cooking (or preheat, ready, probe, done, offline) starts it
         // there, and &ovens=3 adds more (idle) ovens for the home pager.
         const d = demoParams();
-        if (d) setDemo(demoEntries(d.scene, d.count));
+        if (d) {
+          const entries = demoEntries(d.scene, d.count);
+          setDemo(entries);
+          nextHist = [...demoSample(entries[0].id, Date.now()), ...nextHist];
+        }
       }
+      setHistory(nextHist);
       setReady(true);
     })();
   }, [setRealList]);
@@ -320,16 +334,30 @@ export function OvenProvider({ children }: { children: ReactNode }) {
     const ids = new Set(realRef.current.map((o) => o.id));
     save(LAST_COOKS_KEY, Object.fromEntries(Object.entries(all).filter(([id]) => ids.has(id)))).catch(() => {});
   }, []);
+  const saveHistory = useCallback((all: HistoryEntry[]) => {
+    const ids = new Set(realRef.current.map((o) => o.id));
+    save(HISTORY_KEY, all.filter((e) => ids.has(e.ovenId))).catch(() => {});
+  }, []);
   const saveSchedules = useCallback((all: Record<string, ScheduledCook>) => {
     const ids = new Set(realRef.current.map((o) => o.id));
     save(SCHEDULE_KEY, Object.fromEntries(Object.entries(all).filter(([id]) => ids.has(id)))).catch(() => {});
   }, []);
-  const recordCook = useCallback((mode: string, tempF: number, plan?: number, ovenId?: string) => {
-    const id = ovenId ?? currentId;
+  const recordCook = useCallback((mode: string, tempF: number, plan?: number, opts?: { timerMin?: number; ovenId?: string }) => {
+    const id = opts?.ovenId ?? currentId;
     if (!id) return;
-    const cook: LastCook = { mode, tempF, plan, at: Date.now() };
+    const at = Date.now();
+    const cook: LastCook = { mode, tempF, plan, at };
     setLastCooks((all) => { const next = { ...all, [id]: cook }; saveCooks(next); return next; });
-  }, [currentId, saveCooks]);
+    setHistory((all) => {
+      const next = beginCook(all, { ovenId: id, mode, tempF, plan, timerMin: opts?.timerMin, at });
+      saveHistory(next);
+      return next;
+    });
+  }, [currentId, saveCooks, saveHistory]);
+  const clearHistory = useCallback(() => {
+    if (!currentId) return;
+    setHistory((all) => { const next = dropOven(all, currentId); saveHistory(next); return next; });
+  }, [currentId, saveHistory]);
   const countUse = useCallback((mode: string) => {
     setUses((u) => { const next = { ...u, [mode]: (u[mode] ?? 0) + 1 }; save(USES_KEY, next); return next; });
   }, []);
@@ -358,8 +386,10 @@ export function OvenProvider({ children }: { children: ReactNode }) {
   const startDemo = useCallback(() => {
     const d = demoParams();
     const entries = demoEntries(d?.scene ?? 'off', d?.count ?? 1);
+    const id = entries[0].id;
     setDemo(entries);
-    setDemoCurrent(entries[0].id);
+    setDemoCurrent(id);
+    setHistory((h) => (h.some((e) => e.ovenId === id) ? h : [...demoSample(id, Date.now()), ...h]));
   }, []);
 
   const runCook = useCallback(async (entry: OvenEntry, cook: { mode: string; tempF: number; plan?: number; timerMin?: number }) => {
@@ -371,7 +401,7 @@ export function OvenProvider({ children }: { children: ReactNode }) {
       if (!(e instanceof OvenError && e.code === 'timeout') || wasActive || !(await becomesActive(entry.link))) throw e;
     }
     countUse(cook.mode);
-    recordCook(cook.mode, cook.tempF, cook.plan, entry.id);
+    recordCook(cook.mode, cook.tempF, cook.plan, { timerMin: cook.timerMin || undefined, ovenId: entry.id });
     if (cook.timerMin) {
       // Nobody may be at the oven, so a timer that didn't take is said out loud.
       await setTimerPatiently(entry.link, cook.timerMin * 60_000).catch((e) => {
@@ -457,6 +487,7 @@ export function OvenProvider({ children }: { children: ReactNode }) {
       const ids = new Set(demo.map((o) => o.id));
       setDemo(null);
       setDemoCurrent(null);
+      setHistory((all) => all.filter((e) => !ids.has(e.ovenId)));
       setSchedules((all) => Object.fromEntries(Object.entries(all).filter(([id]) => !ids.has(id))));
       return;
     }
@@ -479,21 +510,43 @@ export function OvenProvider({ children }: { children: ReactNode }) {
       saveCooks(rest);
       return rest;
     });
+    setHistory((all) => { const next = dropOven(all, gone.id); saveHistory(next); return next; });
     setSchedules((all) => { const next = clearFor(all, gone.id); saveSchedules(next); return next; });
     // Show a neighbour: the oven after it, or else the one before.
     const neighbour = next[Math.min(Math.max(at, 0), next.length - 1)] ?? null;
     setRealCurrent(neighbour?.id ?? null);
     if (neighbour) save(CURRENT_KEY, neighbour.id).catch(() => {}); else remove(CURRENT_KEY).catch(() => {});
-  }, [demo, current, setHostTrust, setRealList, saveCooks, saveSchedules]);
+  }, [demo, current, setHostTrust, setRealList, saveCooks, saveHistory, saveSchedules]);
+
+  // Close (or open) history rows from each oven's live state: a cook started on
+  // the oven, or a phone start that has now finished.
+  useEffect(() => {
+    const unsubs = ovens.map((o) => {
+      const apply = (s: OvenSnapshot) => {
+        setHistory((all) => {
+          const next = noteLive(all, o.id, {
+            active: s.active, ended: s.ended, mode: s.mode, targetC: s.targetC,
+            elapsedMs: s.elapsedMs, endedAt: s.endedAt, statusAt: s.statusAt,
+          }, Date.now());
+          if (next === all) return all;
+          saveHistory(next);
+          return next;
+        });
+      };
+      apply(o.link.snapshot());
+      return o.link.subscribe(apply);
+    });
+    return () => { unsubs.forEach((u) => u()); };
+  }, [ovens, saveHistory]);
 
   const value = useMemo<Ctx>(
     () => ({
       ready, ovens, currentId, select, paired, link, snap, prefs, setUnit, setPref, resetPrefs, uses, countUse,
-      lastCook, lastCooks, recordCook, scheduled, schedules, scheduleCook, cancelSchedule, startScheduled,
+      lastCook, lastCooks, recordCook, history, clearHistory, scheduled, schedules, scheduleCook, cancelSchedule, startScheduled,
       trusts, setHostTrust, updateConnection, completePairing, startDemo, forget,
     }),
     [ready, ovens, currentId, select, paired, link, snap, prefs, setUnit, setPref, resetPrefs, uses, countUse,
-      lastCook, lastCooks, recordCook, scheduled, schedules, scheduleCook, cancelSchedule, startScheduled,
+      lastCook, lastCooks, recordCook, history, clearHistory, scheduled, schedules, scheduleCook, cancelSchedule, startScheduled,
       trusts, setHostTrust, updateConnection, completePairing, startDemo, forget],
   );
   return <OvenContext.Provider value={value}>{children}</OvenContext.Provider>;

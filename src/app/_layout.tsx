@@ -61,6 +61,7 @@ function Screens() {
         <Stack.Screen name="setup/index" options={{ title: 'Set up' }} />
         <Stack.Screen name="setup/pair" options={{ title: 'Pair your oven' }} />
         <Stack.Screen name="cook" options={{ title: 'Start a cook', presentation: 'modal' }} />
+        <Stack.Screen name="history" options={{ title: 'Cook history' }} />
         <Stack.Screen name="camera" options={{ title: 'Live view', headerShown: false, presentation: 'fullScreenModal', animation: 'fade', contentStyle: { backgroundColor: '#000' } }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
       </Stack>
