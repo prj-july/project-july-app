@@ -42,13 +42,19 @@ export type OvenSnapshot = {
   ended: 'completed' | 'cancelled' | null;
   /** When `ended` was reported, in this app's clock. */
   endedAt: number | null;
+  /**
+   * When the oven's state last came from the oven itself (status, device state or a
+   * cook report), in this app's clock. Null after the link stops or drops, until the
+   * oven reports again: `active` may be stale until then.
+   */
+  statusAt: number | null;
 };
 
 export const emptySnapshot = (): OvenSnapshot => ({
   link: 'connecting', ovenOnline: null, active: false, phase: 'idle', mode: null,
   cavityC: null, targetC: null, probeC: null, probeTargetC: null, planId: 0, progress: null,
   remainingMs: null, remainingAt: 0, elapsedMs: null, imageUrl: null, imageAt: null,
-  offer: null, ended: null, endedAt: null,
+  offer: null, ended: null, endedAt: null, statusAt: null,
 });
 
 export interface OvenLink {
@@ -218,6 +224,8 @@ export class LiveOven implements OvenLink {
 
   stop() {
     this.stopped = true;
+    // Whatever the oven does while the link is down isn't seen: nothing here is current.
+    this.set({ link: 'connecting', statusAt: null });
     this.timers.forEach(clearTimeout);
     this.timers = [];
     if (this.keepalive) clearInterval(this.keepalive);
@@ -237,6 +245,7 @@ export class LiveOven implements OvenLink {
     ws.onopen = () => {
       this.retry = 0;
       this.set({ link: 'online' });
+      this.refreshStatus();
       this.send(MC.Ping, {});
       this.keepalive = setInterval(() => this.send(MC.Ping, {}), 7000);
     };
@@ -249,7 +258,7 @@ export class LiveOven implements OvenLink {
       this.keepalive = null;
       this.ws = null;
       if (this.stopped) return;
-      this.set({ link: 'offline' });
+      this.set({ link: 'offline', statusAt: null });
       const delay = Math.min(30_000, 1000 * 2 ** Math.min(this.retry++, 5));
       this.timers.push(setTimeout(() => this.connect(), delay));
     };
@@ -261,8 +270,10 @@ export class LiveOven implements OvenLink {
       const st = await rest<Json>(this.p.conn, 'GET', `/1/messaging/device/${this.p.oven.id}/status`, { token: this.p.accessToken });
       const ds = st.device_state?.data ?? st.device_state ?? st.device_state_data?.data;
       const plan = st.cook_plan?.data ?? st.cook_plan ?? st.cook_plan_data?.data;
+      if (this.stopped) return;
       const patch: Partial<OvenSnapshot> = {
         ovenOnline: st.connection_state === 'connected' || st.connection_state === 'online' || st.online === true,
+        statusAt: Date.now(),
       };
       if (ds && typeof ds.state === 'string') patch.active = ds.state === 'active';
       if (plan && patch.active !== false) {
@@ -292,7 +303,7 @@ export class LiveOven implements OvenLink {
         return;
       }
       case MC.CookingState: {
-        const patch: Partial<OvenSnapshot> = { ovenOnline: true, active: true, ended: null };
+        const patch: Partial<OvenSnapshot> = { ovenOnline: true, active: true, ended: null, statusAt: Date.now() };
         const cav = num(d.sensor_data?.cavity);
         if (cav !== null) patch.cavityC = cav / 1000;
         const probe = Array.isArray(d.sensor_data?.probe) ? d.sensor_data.probe.find((p: Json) => num(p?.value) !== null) : null;
@@ -320,7 +331,7 @@ export class LiveOven implements OvenLink {
       case MC.CookPlanStarted: {
         const t = planTarget(d);
         this.preheatDone = false;
-        const patch: Partial<OvenSnapshot> = { active: true, ended: null, targetC: t.targetC, probeTargetC: t.probeTargetC, mode: t.mode, planId: t.planId ?? 0 };
+        const patch: Partial<OvenSnapshot> = { active: true, ended: null, targetC: t.targetC, probeTargetC: t.probeTargetC, mode: t.mode, planId: t.planId ?? 0, statusAt: Date.now() };
         if (t.planId !== null) this.planReported(patch, t.planId, true);
         this.set(patch);
         return;
@@ -340,11 +351,11 @@ export class LiveOven implements OvenLink {
       case MC.CookPlanEnded:
         this.preheatDone = false;
         this.planCurrent = false;
-        this.set({ active: false, ended: d.type === 'completed' ? 'completed' : 'cancelled', endedAt: Date.now(), progress: null, remainingMs: null, probeTargetC: null, offer: null });
+        this.set({ active: false, ended: d.type === 'completed' ? 'completed' : 'cancelled', endedAt: Date.now(), progress: null, remainingMs: null, probeTargetC: null, offer: null, statusAt: Date.now() });
         return;
       case MC.DeviceState:
         if (d.state === 'idle') this.preheatDone = this.planCurrent = false;
-        this.set({ active: d.state === 'active', ovenOnline: true });
+        this.set({ active: d.state === 'active', ovenOnline: true, statusAt: Date.now() });
         return;
       case MC.Notification:
         if (d.notification_id === 'NOTIFICATION_PREHEAT_COMPLETE') { this.preheatDone = true; this.set({}); }

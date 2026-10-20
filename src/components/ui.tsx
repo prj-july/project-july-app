@@ -395,11 +395,11 @@ export function tell(title: string, message: string) {
 }
 
 /** Alert.alert does nothing on web; fall back to window.confirm there. */
-export function confirm(title: string, message: string, confirmLabel: string): Promise<boolean> {
+export function confirm(title: string, message: string, confirmLabel: string, cancelLabel = 'Keep going'): Promise<boolean> {
   if (Platform.OS === 'web') return Promise.resolve(globalThis.confirm?.(`${title}\n\n${message}`) ?? true);
   return new Promise((resolve) =>
     Alert.alert(title, message, [
-      { text: 'Keep going', style: 'cancel', onPress: () => resolve(false) },
+      { text: cancelLabel, style: 'cancel', onPress: () => resolve(false) },
       { text: confirmLabel, style: 'destructive', onPress: () => resolve(true) },
     ], { cancelable: true, onDismiss: () => resolve(false) }),
   );

@@ -11,7 +11,7 @@ export type DemoScene = (typeof DEMO_SCENES)[number];
 
 export class DemoOven implements OvenLink {
   readonly demo = true;
-  private s: OvenSnapshot = { ...emptySnapshot(), link: 'online', ovenOnline: true, cavityC: AMBIENT_C };
+  private s: OvenSnapshot = { ...emptySnapshot(), link: 'online', ovenOnline: true, cavityC: AMBIENT_C, statusAt: Date.now() };
   private subs = new Set<(s: OvenSnapshot) => void>();
   private tick: ReturnType<typeof setInterval> | null = null;
   private preheated = false;

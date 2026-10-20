@@ -4,11 +4,12 @@ import { Stack, router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { OvenError } from '@/api/client';
 import { MODES, cToF, fToC, formatDuration, isFixed, validPlan, type CookMode } from '@/api/modes';
+import { DELAYS_MIN, MAX_DELAY_MIN, clampDelayMin, delayLabel, fromDelayMin, startsAtLabel, startsIn } from '@/api/schedule';
 import { GlassFill, ModeTile } from '@/components/glass';
 import { Icon } from '@/components/Icon';
 import { useNow } from '@/components/OvenHero';
 import { Slider } from '@/components/Slider';
-import { Button, Chip, Notice, RoundButton, Screen, SectionLabel, Segmented, T, tell } from '@/components/ui';
+import { Button, Chip, Field, Notice, RoundButton, Screen, SectionLabel, Segmented, T, tell } from '@/components/ui';
 import { useOven, useOvenName } from '@/state/oven';
 import { space, useTheme } from '@/theme';
 
@@ -20,7 +21,7 @@ const STEP_F = 5;
 
 export default function Cook() {
   const { look } = useTheme();
-  const { link, prefs, countUse, recordCook } = useOven();
+  const { link, prefs, countUse, recordCook, scheduleCook } = useOven();
   const glass = look.hero === 'glass';
   const unit = prefs.unit;
   // `temp` (°F) and `plan` come from Repeat on the home screen: the last cook's.
@@ -73,6 +74,12 @@ export default function Cook() {
     }
   }
 
+  function later(startAt: number) {
+    scheduleCook({ mode: mode.id, tempF: startF, plan, timerMin, startAt });
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    router.back();
+  }
+
   // A timed mode's timer is the review's own control; a self-timed plan has none.
   const timer = mode.timed || mode.noTimer ? null : (
     <View style={{ gap: space[3] }}>
@@ -91,26 +98,27 @@ export default function Cook() {
     return (
       <GlassReview
         mode={mode} tempF={startF} setTempF={(f) => setTempF(clampF(f))} nudge={nudge} unit={unit} plan={plan} setPlan={setPlan}
-        timerMin={timerMin} setTimerMin={setTimerMin} busy={busy} error={error} onStart={start} timer={timer}
+        timerMin={timerMin} setTimerMin={setTimerMin} busy={busy} error={error} onStart={start} onLater={later} timer={timer}
       />
     );
   }
-  return <JulyCook modeId={modeId} pick={pick} tempF={startF} plan={plan} setPlan={setPlan} shown={shown} nudge={nudge} unit={unit} timerMin={timerMin} setTimerMin={setTimerMin} busy={busy} error={error} onStart={start} timer={timer} />;
+  return <JulyCook modeId={modeId} pick={pick} tempF={startF} plan={plan} setPlan={setPlan} shown={shown} nudge={nudge} unit={unit} timerMin={timerMin} setTimerMin={setTimerMin} busy={busy} error={error} onStart={start} onLater={later} timer={timer} />;
 }
 
 // --- Still Glass: the card's review (july-oven-card.js, review) ------------------
 
-function GlassReview({ mode, tempF, setTempF, nudge, unit, plan, setPlan, timerMin, setTimerMin, busy, error, onStart, timer }: {
+function GlassReview({ mode, tempF, setTempF, nudge, unit, plan, setPlan, timerMin, setTimerMin, busy, error, onStart, onLater, timer }: {
   mode: CookMode; tempF: number; setTempF: (f: number) => void; nudge: (d: 1 | -1) => void; unit: 'F' | 'C';
   plan: number | undefined; setPlan: (plan: number) => void;
   timerMin: number; setTimerMin: (min: number) => void;
-  busy: boolean; error: string | null; onStart: () => void; timer: React.ReactNode;
+  busy: boolean; error: string | null; onStart: () => void; onLater: (startAt: number) => void; timer: React.ReactNode;
 }) {
   const { c, f, r, t } = useTheme();
   const name = useOvenName();
   const [openedAt] = useState(() => Date.now());
   const now = useNow(true);
   const closesIn = Math.max(0, REVIEW_MS - (now - openedAt));
+  const later = useLater();
   // What is being typed into the number, until Enter or leaving the field.
   const [typed, setTyped] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
@@ -146,14 +154,30 @@ function GlassReview({ mode, tempF, setTempF, nudge, unit, plan, setPlan, timerM
         footer={
           <>
             {error ? <Notice tone="warning" title="The oven didn't start">{error}</Notice> : null}
-            <T v="small" muted>
-              Make sure the oven is empty and the door is closed. Nothing heats until you press Start. This closes in{' '}
-              <Text style={{ fontFamily: f.sansStrong, color: c.ink }}>{formatDuration(closesIn)}</Text>.
-            </T>
+            {later.open && later.startAt ? (
+              <T v="small" muted>
+                Nothing heats until {startsAtLabel(later.startAt)}. Keep this app open on your home Wi-Fi. This closes in{' '}
+                <Text style={{ fontFamily: f.sansStrong, color: c.ink }}>{formatDuration(closesIn)}</Text>.
+              </T>
+            ) : (
+              <T v="small" muted>
+                Make sure the oven is empty and the door is closed. Nothing heats until you press Start. This closes in{' '}
+                <Text style={{ fontFamily: f.sansStrong, color: c.ink }}>{formatDuration(closesIn)}</Text>.
+              </T>
+            )}
             <View style={{ flexDirection: 'row', gap: space[3] }}>
-              <Button style={{ flexGrow: 0, flexShrink: 0, minWidth: 116 }} onPress={() => router.back()}>Not now</Button>
-              <Button style={{ flex: 1 }} variant="primary" busy={busy} onPress={onStart}>Start preheating</Button>
+              <Button style={{ flexGrow: 0, flexShrink: 0, minWidth: 116 }} onPress={() => (later.open ? later.close() : router.back())}>
+                {later.open ? 'Back' : 'Not now'}
+              </Button>
+              {later.open && later.startAt ? (
+                <Button style={{ flex: 1 }} variant="primary" busy={busy} onPress={() => onLater(later.startAt!)}>
+                  {`Start at ${startsAtLabel(later.startAt)}`}
+                </Button>
+              ) : (
+                <Button style={{ flex: 1 }} variant="primary" busy={busy} onPress={onStart}>Start preheating</Button>
+              )}
             </View>
+            {later.open ? null : <Button variant="quiet" onPress={() => later.pick(30)}>Start later</Button>}
           </>
         }
       >
@@ -223,6 +247,8 @@ function GlassReview({ mode, tempF, setTempF, nudge, unit, plan, setPlan, timerM
         </View>
 
         {timer}
+
+        {later.open ? <LaterPicks later={later} now={now} /> : null}
       </Screen>
     </>
   );
@@ -230,20 +256,33 @@ function GlassReview({ mode, tempF, setTempF, nudge, unit, plan, setPlan, timerM
 
 // --- July -------------------------------------------------------------------------
 
-function JulyCook({ modeId, pick, tempF, plan, setPlan, shown, nudge, unit, timerMin, setTimerMin, busy, error, onStart, timer }: {
+function JulyCook({ modeId, pick, tempF, plan, setPlan, shown, nudge, unit, timerMin, setTimerMin, busy, error, onStart, onLater, timer }: {
   modeId: string; pick: (id: string) => void; tempF: number; plan: number | undefined; setPlan: (plan: number) => void; shown: number; nudge: (d: 1 | -1) => void; unit: 'F' | 'C';
   timerMin: number; setTimerMin: (min: number) => void;
-  busy: boolean; error: string | null; onStart: () => void; timer: React.ReactNode;
+  busy: boolean; error: string | null; onStart: () => void; onLater: (startAt: number) => void; timer: React.ReactNode;
 }) {
   const { c, f, r } = useTheme();
   const mode = MODES.find((m) => m.id === modeId)!;
+  const later = useLater();
+  const now = useNow(later.open);
   return (
     <Screen
       footer={
         <>
           {error ? <Notice tone="warning" title="The oven didn't start">{error}</Notice> : null}
-          <Button variant="primary" icon="flame" busy={busy} onPress={onStart}>{mode.plans || mode.timed ? `Start ${mode.label.toLowerCase()}` : `Preheat to ${shown}°${unit}`}</Button>
-          <T v="small" muted style={{ textAlign: 'center' }}>The oven lets you know when it’s hot.</T>
+          {later.open && later.startAt ? (
+            <>
+              <Button variant="primary" busy={busy} onPress={() => onLater(later.startAt!)}>{`Start at ${startsAtLabel(later.startAt)}`}</Button>
+              <Button variant="quiet" onPress={later.close}>Start now instead</Button>
+              <T v="small" muted style={{ textAlign: 'center' }}>Nothing heats until then. Keep this app open on your home Wi-Fi.</T>
+            </>
+          ) : (
+            <>
+              <Button variant="primary" icon="flame" busy={busy} onPress={onStart}>{mode.plans || mode.timed ? `Start ${mode.label.toLowerCase()}` : `Preheat to ${shown}°${unit}`}</Button>
+              <Button variant="quiet" onPress={() => later.pick(30)}>Start later</Button>
+              <T v="small" muted style={{ textAlign: 'center' }}>The oven lets you know when it’s hot.</T>
+            </>
+          )}
         </>
       }
     >
@@ -314,7 +353,58 @@ function JulyCook({ modeId, pick, tempF, plan, setPlan, shown, nudge, unit, time
       )}
 
       {timer}
+
+      {later.open ? <LaterPicks later={later} now={now} /> : null}
     </Screen>
+  );
+}
+
+function useLater() {
+  const [open, setOpen] = useState(false);
+  const [delayMin, setDelayMin] = useState(30);
+  const [startAt, setStartAt] = useState<number | null>(null);
+  const [typed, setTyped] = useState('');
+  const pick = (min: number, fromType = false) => {
+    const at = fromDelayMin(Date.now(), min);
+    if (!at) return;
+    setDelayMin(clampDelayMin(min));
+    setStartAt(at);
+    setOpen(true);
+    if (!fromType) setTyped('');
+  };
+  const close = () => { setOpen(false); setTyped(''); };
+  const type = (text: string) => {
+    const digits = text.replace(/\D/g, '').slice(0, 3);
+    const n = parseInt(digits, 10);
+    // Past 12 hours the field shows the 12 hours the start will use.
+    setTyped(n > MAX_DELAY_MIN ? String(MAX_DELAY_MIN) : digits);
+    if (n >= 1) pick(n, true);
+  };
+  return { open, delayMin, startAt, typed, pick, close, type };
+}
+
+function LaterPicks({ later, now }: { later: ReturnType<typeof useLater>; now: number }) {
+  return (
+    <View style={{ gap: space[3] }}>
+      <SectionLabel>Start later</SectionLabel>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space[2] }}>
+        {DELAYS_MIN.map((m) => (
+          <Chip key={m} selected={later.delayMin === m && !later.typed} onPress={() => later.pick(m)}>
+            {delayLabel(m)}
+          </Chip>
+        ))}
+      </View>
+      <Field
+        label="Minutes from now"
+        value={later.typed}
+        onChangeText={later.type}
+        keyboardType="number-pad"
+        hint={`1 min to ${delayLabel(MAX_DELAY_MIN)}`}
+      />
+      {later.startAt ? (
+        <T muted>{`Starts at ${startsAtLabel(later.startAt)} · in ${startsIn(later.startAt, now)}`}</T>
+      ) : null}
+    </View>
   );
 }
 

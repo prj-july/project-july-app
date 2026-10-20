@@ -51,7 +51,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "test": "npx --yes tsx scripts/protocol.test.ts && npx --yes tsx scripts/client.test.ts && npx --yes tsx scripts/discover.test.ts && npx --yes tsx scripts/camera.test.ts",
+    "test": "npx --yes tsx scripts/protocol.test.ts && npx --yes tsx scripts/client.test.ts && npx --yes tsx scripts/discover.test.ts && npx --yes tsx scripts/camera.test.ts && npx --yes tsx scripts/schedule.test.ts",
     "test:integration": "npx --yes tsx scripts/integration.test.ts",
     "lint": "expo lint",
     "build:android:local": "node scripts/build-android-release.js",
